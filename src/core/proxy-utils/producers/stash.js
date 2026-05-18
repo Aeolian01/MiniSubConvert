@@ -1,7 +1,12 @@
 import {
     isPresent,
     produceProxyListOutput,
+    supportsShadowsocksV2rayPluginMode,
 } from '@/core/proxy-utils/producers/utils';
+import {
+    deleteHttpUpgradeEarlyDataMetadata,
+    normalizeWebSocketEarlyDataPath,
+} from '../transport-path';
 import $ from '@/core/app';
 
 export default function Stash_Producer() {
@@ -10,6 +15,7 @@ export default function Stash_Producer() {
         // https://stash.wiki/proxy-protocols/proxy-types#shadowsocks
         const list = proxies
             .filter((proxy) => {
+                if (opts['include-unsupported-proxy']) return true;
                 if (
                     ![
                         'ss',
@@ -49,6 +55,10 @@ export default function Stash_Producer() {
                             '2022-blake3-aes-256-gcm',
                         ].includes(proxy.cipher)) ||
                     (proxy.type === 'snell' && proxy.version >= 4)
+                ) {
+                    return false;
+                } else if (
+                    !supportsShadowsocksV2rayPluginMode(proxy, ['websocket'])
                 ) {
                     return false;
                 } else if (
@@ -264,25 +274,12 @@ export default function Stash_Producer() {
                     }
                 }
                 if (['ws'].includes(proxy.network)) {
-                    const networkPath = proxy[`${proxy.network}-opts`]?.path;
-                    if (networkPath) {
-                        const reg = /^(.*?)(?:\?ed=(\d+))?$/;
-                        // eslint-disable-next-line no-unused-vars
-                        const [_, path = '', ed = ''] = reg.exec(networkPath);
-                        proxy[`${proxy.network}-opts`].path = path;
-                        if (ed !== '') {
-                            proxy['ws-opts']['early-data-header-name'] =
-                                'Sec-WebSocket-Protocol';
-                            proxy['ws-opts']['max-early-data'] = parseInt(
-                                ed,
-                                10,
-                            );
-                        }
-                    } else {
-                        proxy[`${proxy.network}-opts`] =
-                            proxy[`${proxy.network}-opts`] || {};
-                        proxy[`${proxy.network}-opts`].path = '/';
+                    const networkOptsKey = `${proxy.network}-opts`;
+                    proxy[networkOptsKey] = proxy[networkOptsKey] || {};
+                    if (!proxy[networkOptsKey].path) {
+                        proxy[networkOptsKey].path = '/';
                     }
+                    normalizeWebSocketEarlyDataPath(proxy[networkOptsKey]);
                 }
 
                 if (proxy['plugin-opts']?.tls) {
@@ -334,12 +331,17 @@ export default function Stash_Producer() {
                 delete proxy.id;
                 delete proxy.resolved;
                 delete proxy['no-resolve'];
+                delete proxy['ip-cidr'];
+                delete proxy['ipv6-cidr'];
                 if (type !== 'internal') {
                     for (const key in proxy) {
                         if (proxy[key] == null || /^_/i.test(key)) {
                             delete proxy[key];
                         }
                     }
+                    deleteHttpUpgradeEarlyDataMetadata(
+                        proxy[`${proxy.network}-opts`],
+                    );
                 }
                 if (
                     ['grpc'].includes(proxy.network) &&

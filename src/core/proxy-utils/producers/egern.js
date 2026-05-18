@@ -1,5 +1,9 @@
 import $ from '@/core/app';
-import { isPresent, produceProxyListOutput } from './utils';
+import {
+    getWireGuardAddressWithCIDR,
+    isPresent,
+    produceProxyListOutput,
+} from './utils';
 
 export default function Egern_Producer() {
     const type = 'ALL';
@@ -113,6 +117,11 @@ export default function Egern_Producer() {
                             port: proxy.port,
                             username: proxy.username,
                             password: proxy.password,
+                            ...(hasHeaders(proxy)
+                                ? {
+                                      headers: proxy.headers,
+                                  }
+                                : {}),
                             tfo: proxy.tfo || proxy['fast-open'],
                             next_hop: proxy.next_hop,
                             ...(proxy.tls
@@ -152,10 +161,18 @@ export default function Egern_Producer() {
                                 proxy.udp || proxy.udp_relay || proxy.udp_relay,
                             next_hop: proxy.next_hop,
                         };
-                        if (original.plugin === 'obfs') {
-                            proxy.obfs = original['plugin-opts'].mode;
-                            proxy.obfs_host = original['plugin-opts'].host;
-                            proxy.obfs_uri = original['plugin-opts'].path;
+                        if (isPresent(original, 'plugin')) {
+                            if (original.plugin === 'obfs') {
+                                proxy.obfs = original['plugin-opts'].mode;
+                                proxy.obfs_host = original['plugin-opts'].host;
+                                proxy.obfs_uri = original['plugin-opts'].path;
+                            } else if (
+                                !['shadow-tls'].includes(original.plugin)
+                            ) {
+                                throw new Error(
+                                    `plugin ${original.plugin} is not supported`,
+                                );
+                            }
                         }
                     } else if (proxy.type === 'hysteria2') {
                         proxy = {
@@ -164,6 +181,14 @@ export default function Egern_Producer() {
                             server: proxy.server,
                             port: proxy.port,
                             auth: proxy.password,
+                            ...(isPresent(proxy, 'up')
+                                ? {
+                                      bandwidth: parseInt(
+                                          `${proxy.up}`.match(/\d+/)?.[0] || 0,
+                                          10,
+                                      ),
+                                  }
+                                : {}),
                             tfo: proxy.tfo || proxy['fast-open'],
                             udp_relay:
                                 proxy.udp || proxy.udp_relay || proxy.udp_relay,
@@ -425,8 +450,14 @@ export default function Egern_Producer() {
                         proxy = {
                             type: 'wireguard',
                             name: proxy.name,
-                            local_ipv4: proxy.ip,
-                            local_ipv6: proxy.ipv6,
+                            local_ipv4: getWireGuardAddressWithCIDR(
+                                proxy,
+                                'ipv4',
+                            ),
+                            local_ipv6: getWireGuardAddressWithCIDR(
+                                proxy,
+                                'ipv6',
+                            ),
                             server: proxy.server,
                             port: proxy.port,
                             private_key: proxy['private-key'],
@@ -562,11 +593,7 @@ export default function Egern_Producer() {
                     };
                 } catch (err) {
                     $.error(
-                        `Cannot produce proxy: ${JSON.stringify(
-                            sourceProxy,
-                            null,
-                            2,
-                        )}\nReason: ${err}`,
+                        `Cannot produce proxy: ${proxy.name}\nReason: ${err}`,
                     );
                     return null;
                 }
@@ -575,4 +602,12 @@ export default function Egern_Producer() {
         return produceProxyListOutput(list, type, opts);
     };
     return { type, produce };
+}
+
+function hasHeaders(proxy) {
+    return (
+        proxy?.headers &&
+        typeof proxy.headers === 'object' &&
+        Object.keys(proxy.headers).length > 0
+    );
 }

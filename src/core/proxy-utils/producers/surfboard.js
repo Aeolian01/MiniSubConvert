@@ -28,12 +28,23 @@ export default function Surfboard_Producer() {
                 return snell(proxy);
             case 'socks5':
                 return socks5(proxy);
-            case 'anytls':
-                return anytls(proxy);
             case 'hysteria2':
                 return hysteria2(proxy);
             case 'wireguard-surge':
                 return wireguard(proxy);
+        }
+        if (proxy.type === 'anytls') {
+            if (
+                proxy.network &&
+                (!['tcp'].includes(proxy.network) ||
+                    (['tcp'].includes(proxy.network) && proxy['reality-opts']))
+            ) {
+                throw new Error(
+                    `Platform ${targetPlatform} does not support proxy type ${proxy.type} with network or REALITY`,
+                );
+            }
+
+            return anytls(proxy);
         }
         throw new Error(
             `Platform ${targetPlatform} does not support proxy type: ${proxy.type}`,

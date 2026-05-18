@@ -1,7 +1,16 @@
 import {
+    getWireGuardAddressWithCIDR,
     isPresent,
     produceProxyListOutput,
+    supportsShadowsocksV2rayPluginMode,
 } from '@/core/proxy-utils/producers/utils';
+import { isNotBlank, isPlainObject } from '@/utils';
+import {
+    deleteHttpUpgradeEarlyDataMetadata,
+    normalizeWebSocketEarlyDataPath,
+} from '../transport-path';
+import { ECH_DNS_FIELD } from '../ech-utils';
+import $ from '@/core/app';
 
 const ipVersions = {
     dual: 'dual',
@@ -11,17 +20,56 @@ const ipVersions = {
     'prefer-v6': 'ipv6-prefer',
 };
 
+function warnMihomoUnsupportedEchDns(proxy, echOpts, echOptsPath) {
+    if (!isPlainObject(echOpts) || !isNotBlank(echOpts[ECH_DNS_FIELD])) {
+        return;
+    }
+
+    const queryServerName = isNotBlank(echOpts['query-server-name'])
+        ? echOpts['query-server-name']
+        : '这里是 query-server-name';
+    $.warn(
+        `mihomo 不支持在 ech-opts 中配置 ECH DNS. 如需跟节点 ECH 配置一致, 请在 mihomo 配置文件里设置 dns["nameserver-policy"]["${queryServerName}"] = ["${echOpts[ECH_DNS_FIELD]}"].`,
+    );
+}
+
+function warnMihomoUnsupportedEchDnsFields(proxy, type) {
+    if (type === 'internal') {
+        return;
+    }
+
+    warnMihomoUnsupportedEchDns(proxy, proxy['ech-opts'], 'ech-opts');
+    warnMihomoUnsupportedEchDns(
+        proxy,
+        proxy['xhttp-opts']?.['download-settings']?.['ech-opts'],
+        'xhttp-opts.download-settings.ech-opts',
+    );
+}
+
 export default function ClashMeta_Producer() {
     const type = 'ALL';
     const produce = (proxies, type, opts = {}) => {
         const list = proxies
             .filter((proxy) => {
                 if (opts['include-unsupported-proxy']) return true;
-                if (proxy.type === 'snell' && proxy.version >= 4) {
+
+                if (proxy.type === 'h2-connect') {
+                    $.error(
+                        `Mihomo does not support HTTP/2 CONNECT proxy type. Proxy ${proxy.name} has been filtered.`,
+                    );
                     return false;
-                } else if (
-                    ['tailscale', 'juicity', 'naive'].includes(proxy.type)
-                ) {
+                }
+                if (hasRootHeaders(proxy) && proxy.type === 'trusttunnel') {
+                    $.error(
+                        `Mihomo does not support headers for TrustTunnel proxy ${proxy.name}. Proxy has been filtered.`,
+                    );
+                    return false;
+                }
+                if (!supportsShadowsocksV2rayPluginMode(proxy, ['websocket'])) {
+                    return false;
+                } else if (proxy.type === 'snell' && proxy.version >= 4) {
+                    return false;
+                } else if (['juicity', 'naive'].includes(proxy.type)) {
                     return false;
                 } else if (
                     ['ss'].includes(proxy.type) &&
@@ -81,6 +129,8 @@ export default function ClashMeta_Producer() {
                 return true;
             })
             .map((proxy) => {
+                warnMihomoUnsupportedEchDnsFields(proxy, type);
+
                 if (proxy['reality-opts'] && !proxy['client-fingerprint']) {
                     proxy['client-fingerprint'] = 'chrome';
                 }
@@ -158,12 +208,41 @@ export default function ClashMeta_Producer() {
                     proxy['preshared-key'] =
                         proxy['preshared-key'] ?? proxy['pre-shared-key'];
                     proxy['pre-shared-key'] = proxy['preshared-key'];
+                    proxy.ip = getWireGuardAddressWithCIDR(proxy, 'ipv4');
+                    proxy.ipv6 = getWireGuardAddressWithCIDR(proxy, 'ipv6');
                 } else if (proxy.type === 'snell' && proxy.version < 3) {
                     delete proxy.udp;
                 } else if (proxy.type === 'vless') {
                     if (isPresent(proxy, 'sni')) {
                         proxy.servername = proxy.sni;
                         delete proxy.sni;
+                    }
+                    // Mihomo 的运行时校验（`adapter/outbound/vless.go`）
+                    // 会先把 flow 截断到 16 个字符，并且只接受
+                    // `xtls-rprx-vision`。`xtls-rprx-direct`、
+                    // `xtls-rprx-unknown` 等值在 Mihomo 加载时会报错。
+                    //
+                    // 另外，xhttp 使用 `alpn: [h3]` 时必须启用 TLS，
+                    // 且不能启用 Reality；这条限制同时作用于根 xhttp
+                    // 配置，以及继承根配置默认值后的嵌套
+                    // `download-settings`。
+
+                    // 1. mihomo 似乎不支持上行/下行有一个为 tls 一个不为 tls. 但是这跟转换无关了
+                    // 2. 下行有 tls 且上行有 reality-opts 且下行无 reality-opts →
+                    //    补 reality-opts: { public-key: '' }，阻断 reality 继承
+                    if (
+                        proxy.network === 'xhttp' &&
+                        proxy['xhttp-opts']?.['download-settings']
+                    ) {
+                        const ds = proxy['xhttp-opts']['download-settings'];
+                        if (
+                            proxy.tls &&
+                            ds.tls &&
+                            proxy['reality-opts'] &&
+                            !ds['reality-opts']
+                        ) {
+                            ds['reality-opts'] = { 'public-key': '' };
+                        }
                     }
                 } else if (proxy.type === 'ss') {
                     if (
@@ -221,25 +300,12 @@ export default function ClashMeta_Producer() {
                     }
                 }
                 if (['ws'].includes(proxy.network)) {
-                    const networkPath = proxy[`${proxy.network}-opts`]?.path;
-                    if (networkPath) {
-                        const reg = /^(.*?)(?:\?ed=(\d+))?$/;
-                        // eslint-disable-next-line no-unused-vars
-                        const [_, path = '', ed = ''] = reg.exec(networkPath);
-                        proxy[`${proxy.network}-opts`].path = path;
-                        if (ed !== '') {
-                            proxy['ws-opts']['early-data-header-name'] =
-                                'Sec-WebSocket-Protocol';
-                            proxy['ws-opts']['max-early-data'] = parseInt(
-                                ed,
-                                10,
-                            );
-                        }
-                    } else {
-                        proxy[`${proxy.network}-opts`] =
-                            proxy[`${proxy.network}-opts`] || {};
-                        proxy[`${proxy.network}-opts`].path = '/';
+                    const networkOptsKey = `${proxy.network}-opts`;
+                    proxy[networkOptsKey] = proxy[networkOptsKey] || {};
+                    if (!proxy[networkOptsKey].path) {
+                        proxy[networkOptsKey].path = '/';
                     }
+                    normalizeWebSocketEarlyDataPath(proxy[networkOptsKey]);
                 }
 
                 if (proxy['plugin-opts']?.tls) {
@@ -282,12 +348,17 @@ export default function ClashMeta_Producer() {
                 delete proxy.id;
                 delete proxy.resolved;
                 delete proxy['no-resolve'];
+                delete proxy['ip-cidr'];
+                delete proxy['ipv6-cidr'];
                 if (type !== 'internal' || opts['delete-underscore-fields']) {
                     for (const key in proxy) {
                         if (proxy[key] == null || /^_/i.test(key)) {
                             delete proxy[key];
                         }
                     }
+                    deleteHttpUpgradeEarlyDataMetadata(
+                        proxy[`${proxy.network}-opts`],
+                    );
                 }
                 if (
                     ['grpc'].includes(proxy.network) &&
@@ -307,4 +378,12 @@ export default function ClashMeta_Producer() {
         return produceProxyListOutput(list, type, opts);
     };
     return { type, produce };
+}
+
+function hasRootHeaders(proxy) {
+    return (
+        proxy?.headers &&
+        typeof proxy.headers === 'object' &&
+        Object.keys(proxy.headers).length > 0
+    );
 }

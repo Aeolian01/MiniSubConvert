@@ -29,8 +29,6 @@ export default function Loon_Producer() {
                 return shadowsocksr(proxy);
             case 'trojan':
                 return trojan(proxy);
-            case 'anytls':
-                return anytls(proxy);
             case 'vmess':
                 return vmess(proxy, opts['include-unsupported-proxy']);
             case 'vless':
@@ -43,6 +41,19 @@ export default function Loon_Producer() {
                 return wireguard(proxy);
             case 'hysteria2':
                 return hysteria2(proxy);
+        }
+        if (proxy.type === 'anytls') {
+            if (
+                proxy.network &&
+                (!['tcp'].includes(proxy.network) ||
+                    (['tcp'].includes(proxy.network) && proxy['reality-opts']))
+            ) {
+                throw new Error(
+                    `Platform ${targetPlatform} does not support proxy type ${proxy.type} with network or REALITY`,
+                );
+            }
+
+            return anytls(proxy);
         }
         throw new Error(
             `Platform ${targetPlatform} does not support proxy type: ${proxy.type}`,
