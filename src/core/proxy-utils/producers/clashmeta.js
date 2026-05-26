@@ -1,6 +1,7 @@
 import {
     getWireGuardAddressWithCIDR,
     isPresent,
+    normalizePluginMuxBooleanValue,
     produceProxyListOutput,
     supportsShadowsocksV2rayPluginMode,
 } from '@/core/proxy-utils/producers/utils';
@@ -67,7 +68,19 @@ export default function ClashMeta_Producer() {
                 }
                 if (!supportsShadowsocksV2rayPluginMode(proxy, ['websocket'])) {
                     return false;
-                } else if (proxy.type === 'snell' && proxy.version >= 4) {
+                } else if (
+                    proxy.type === 'snell' &&
+                    !isSupportedMihomoVersion(proxy.version, [1, 2, 3, 4, 5])
+                ) {
+                    return false;
+                } else if (
+                    hasMihomoShadowTls(proxy) &&
+                    (proxy.type !== 'ss' ||
+                        !isSupportedMihomoVersion(
+                            getMihomoShadowTlsVersion(proxy),
+                            [1, 2, 3],
+                        ))
+                ) {
                     return false;
                 } else if (['juicity', 'naive'].includes(proxy.type)) {
                     return false;
@@ -261,6 +274,12 @@ export default function ClashMeta_Producer() {
                     }
                 }
 
+                if (isPresent(proxy, 'plugin-opts.mux')) {
+                    proxy['plugin-opts'].mux = normalizePluginMuxBooleanValue(
+                        proxy['plugin-opts'].mux,
+                    );
+                }
+
                 if (
                     ['vmess', 'vless'].includes(proxy.type) &&
                     proxy.network === 'http'
@@ -291,12 +310,27 @@ export default function ClashMeta_Producer() {
                     ) {
                         proxy['h2-opts'].path = path[0];
                     }
-                    let host = proxy['h2-opts']?.headers?.host;
+                    let host =
+                        proxy['h2-opts']?.host ??
+                        proxy['h2-opts']?.headers?.host ??
+                        proxy['h2-opts']?.headers?.Host;
                     if (
-                        isPresent(proxy, 'h2-opts.headers.Host') &&
-                        !Array.isArray(host)
+                        (isPresent(proxy, 'h2-opts.host') ||
+                            isPresent(proxy, 'h2-opts.headers.host') ||
+                            isPresent(proxy, 'h2-opts.headers.Host'))
                     ) {
-                        proxy['h2-opts'].headers.host = [host];
+                        proxy['h2-opts'].host = Array.isArray(host)
+                            ? host
+                            : [host];
+                    }
+                    if (proxy['h2-opts']?.headers) {
+                        delete proxy['h2-opts'].headers.host;
+                        delete proxy['h2-opts'].headers.Host;
+                        if (
+                            Object.keys(proxy['h2-opts'].headers).length === 0
+                        ) {
+                            delete proxy['h2-opts'].headers;
+                        }
                     }
                 }
                 if (['ws'].includes(proxy.network)) {
@@ -386,4 +420,40 @@ function hasRootHeaders(proxy) {
         typeof proxy.headers === 'object' &&
         Object.keys(proxy.headers).length > 0
     );
+}
+
+function isSupportedMihomoVersion(version, supportedVersions) {
+    if (version == null) {
+        return true;
+    }
+
+    const normalized =
+        typeof version === 'string' ? version.trim() : `${version}`;
+    if (!normalized) {
+        return false;
+    }
+
+    const parsed = Number(normalized);
+    return Number.isInteger(parsed) && supportedVersions.includes(parsed);
+}
+
+function hasMihomoShadowTls(proxy) {
+    return (
+        proxy?.plugin === 'shadow-tls' ||
+        isPresent(proxy, 'shadow-tls-password') ||
+        isPresent(proxy, 'shadow-tls-sni') ||
+        isPresent(proxy, 'shadow-tls-version')
+    );
+}
+
+function getMihomoShadowTlsVersion(proxy) {
+    if (isPresent(proxy, 'shadow-tls-version')) {
+        return proxy['shadow-tls-version'];
+    }
+
+    if (proxy?.plugin === 'shadow-tls') {
+        return proxy?.['plugin-opts']?.version;
+    }
+
+    return undefined;
 }

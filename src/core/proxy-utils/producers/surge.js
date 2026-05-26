@@ -44,6 +44,10 @@ function quoteSurgeValue(value) {
         .replace(/"/g, '\\"')}"`;
 }
 
+function hasNonBlankValue(value) {
+    return value != null && `${value}`.trim().length > 0;
+}
+
 function appendClientCert(result, proxy) {
     const clientCert = isPresent(proxy, 'keystore-client-cert')
         ? proxy['keystore-client-cert']
@@ -66,6 +70,17 @@ function appendSshPrivateKey(result, proxy) {
     ) {
         result.append(`,private-key=${quoteSurgeValue(privateKey)}`);
     }
+}
+
+function warnMaxStreamsIfNeeded(proxy) {
+    if (!isPresent(proxy, 'max-streams')) return;
+
+    const maxStreams = Number(stripSurgeQuotes(proxy['max-streams']));
+    if (!Number.isInteger(maxStreams) || maxStreams <= 3) return;
+
+    $.warn(
+        `Surge ${proxy.type} proxy ${proxy.name}: max-streams=${maxStreams} is greater than 3. Too many streams sharing one TCP connection may hurt performance.`,
+    );
 }
 
 export default function Surge_Producer() {
@@ -434,6 +449,11 @@ function trusttunnel(proxy) {
     result.appendIfPresent(`,username="${proxy.username}"`, 'username');
     result.appendIfPresent(`,password="${proxy.password}"`, 'password');
     appendHeaders(result, proxy);
+    warnMaxStreamsIfNeeded(proxy);
+    result.appendIfPresent(
+        `,max-streams=${proxy['max-streams']}`,
+        'max-streams',
+    );
 
     const ip_version = ipVersions[proxy['ip-version']] || proxy['ip-version'];
     result.appendIfPresent(`,ip-version=${ip_version}`, 'ip-version');
@@ -502,6 +522,11 @@ function h2Connect(proxy) {
     result.appendIfPresent(`,username="${proxy.username}"`, 'username');
     result.appendIfPresent(`,password="${proxy.password}"`, 'password');
     appendHeaders(result, proxy);
+    warnMaxStreamsIfNeeded(proxy);
+    result.appendIfPresent(
+        `,max-streams=${proxy['max-streams']}`,
+        'max-streams',
+    );
 
     const ip_version = ipVersions[proxy['ip-version']] || proxy['ip-version'];
     result.appendIfPresent(`,ip-version=${ip_version}`, 'ip-version');
@@ -1055,14 +1080,15 @@ function tuic(proxy) {
         'alpn',
     );
 
-    if (isPresent(proxy, 'ports')) {
-        result.append(`,port-hopping="${proxy.ports.replace(/,/g, ';')}"`);
+    if (hasNonBlankValue(proxy.ports)) {
+        result.append(
+            `,port-hopping="${String(proxy.ports).replace(/,/g, ';')}"`,
+        );
     }
 
-    result.appendIfPresent(
-        `,port-hopping-interval=${proxy['hop-interval']}`,
-        'hop-interval',
-    );
+    if (hasNonBlankValue(proxy['hop-interval'])) {
+        result.append(`,port-hopping-interval=${proxy['hop-interval']}`);
+    }
 
     const ip_version = ipVersions[proxy['ip-version']] || proxy['ip-version'];
     result.appendIfPresent(`,ip-version=${ip_version}`, 'ip-version');
@@ -1327,14 +1353,15 @@ function hysteria2(proxy) {
 
     result.appendIfPresent(`,password="${proxy.password}"`, 'password');
 
-    if (isPresent(proxy, 'ports')) {
-        result.append(`,port-hopping="${proxy.ports.replace(/,/g, ';')}"`);
+    if (hasNonBlankValue(proxy.ports)) {
+        result.append(
+            `,port-hopping="${String(proxy.ports).replace(/,/g, ';')}"`,
+        );
     }
 
-    result.appendIfPresent(
-        `,port-hopping-interval=${proxy['hop-interval']}`,
-        'hop-interval',
-    );
+    if (hasNonBlankValue(proxy['hop-interval'])) {
+        result.append(`,port-hopping-interval=${proxy['hop-interval']}`);
+    }
 
     if (proxy['obfs-password'] && proxy.obfs == 'salamander') {
         result.append(`,salamander-password="${proxy['obfs-password']}"`);
