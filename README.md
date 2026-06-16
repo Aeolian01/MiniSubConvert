@@ -1,6 +1,6 @@
 # MiniSubConvert
 
-使用 SubStore 作为核心的订阅转换,支持部署到 CloudFlare Worker
+使用 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 作为核心的订阅转换,支持部署到 CloudFlare Worker
 
 ## 支持的平台 (Target)
 
