@@ -8,7 +8,7 @@ const SHOULD_BUILD_BUNDLE = !CLI_FLAGS.has('--parsers-only');
 const HELP_TEXT = `Usage: node scripts/build.js [--parsers-only]
 
 --parsers-only   Only generate pre-compiled Peggy parsers.
-Without --parsers-only, build the Node bundle from .build/src/node.js.`;
+Without --parsers-only, build dist/minisubconvert.js and dist/proxy-utils.js from .build/src/node.js and .build/src/core/proxy-utils/index.js.`;
 
 if (CLI_FLAGS.has('--help')) {
     console.log(HELP_TEXT);
@@ -36,6 +36,8 @@ function createPaths() {
         buildParsersIndexPath: path.join(buildParsersDir, 'index.js'),
         nodeEntryPath: path.join(buildSrcDir, 'node.js'),
         nodeOutputPath: path.join(rootDir, 'dist/minisubconvert.js'),
+        proxyUtilsEntryPath: path.join(buildSrcDir, 'core/proxy-utils/index.js'),
+        proxyUtilsOutputPath: path.join(rootDir, 'dist/proxy-utils.js'),
     };
 }
 
@@ -189,28 +191,30 @@ function compilePeggyParsers() {
     console.log(`Generated ${sourceFiles.length} parser modules.`);
 }
 
-async function buildNodeBundle() {
-    ensureDir(path.dirname(PATHS.nodeOutputPath));
+async function buildBundle(entryPath, outputPath, banner) {
+    ensureDir(path.dirname(outputPath));
 
     await esbuild.build({
-        entryPoints: [PATHS.nodeEntryPath],
-        outfile: PATHS.nodeOutputPath,
+        entryPoints: [entryPath],
+        outfile: outputPath,
         bundle: true,
         minify: true,
         platform: 'node',
         format: 'cjs',
         target: 'node20',
         sourcemap: false,
-        banner: {
-            js: '#!/usr/bin/env node',
-        },
+        banner: banner ? { js: banner } : undefined,
         tsconfig: PATHS.buildTsconfigPath,
         logLevel: 'info',
     });
+}
 
-    console.log(
-        `Node bundle generated: ${path.relative(PATHS.rootDir, PATHS.nodeOutputPath)}`,
-    );
+async function buildNodeBundle() {
+    await buildBundle(PATHS.nodeEntryPath, PATHS.nodeOutputPath, '#!/usr/bin/env node');
+}
+
+async function buildProxyUtilsBundle() {
+    await buildBundle(PATHS.proxyUtilsEntryPath, PATHS.proxyUtilsOutputPath);
 }
 
 async function main() {
@@ -219,9 +223,8 @@ async function main() {
 
         if (SHOULD_BUILD_BUNDLE) {
             await buildNodeBundle();
+            await buildProxyUtilsBundle();
         }
-
-        console.log('Build complete.');
     } catch (error) {
         console.error('Build failed:', error);
         process.exit(1);

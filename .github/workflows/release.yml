@@ -1,4 +1,4 @@
-name: Publish Docker Hub
+name: Publish Release and Docker Hub
 
 on:
   workflow_dispatch:
@@ -29,9 +29,20 @@ jobs:
         run: |
           pnpm install
           pnpm run build
-      - name: Generate Date Tag
-        id: date
-        run: echo "DATE_TAG=$(date +'%y%m%d')" >> $GITHUB_OUTPUT
+      - name: Update Latest Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin latest
+      - name: Upload Release Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: latest
+        run: |
+          COMMIT_MESSAGE="$(git log -1 --pretty=%B)"
+          gh release delete "$RELEASE_TAG" --yes > /dev/null 2>&1 || true
+          gh release create "$RELEASE_TAG" dist/minisubconvert.js dist/proxy-utils.js --title "$RELEASE_TAG" --notes "$COMMIT_MESSAGE" --latest --verify-tag
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -41,7 +52,6 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
           tags: |
             type=raw,value=latest
-            type=raw,value=${{ steps.date.outputs.DATE_TAG }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
