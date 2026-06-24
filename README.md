@@ -30,7 +30,7 @@
 
     | Secret 名称 | 说明 |
     | :--- | :--- |
-    | `SECRET` | 自定义访问密钥（例如 `my-secret-token`） |
+    | `SECRET` | 至少 16 位的随机访问密钥；不要使用短数字、常见单词或示例值 |
     | `CLOUDFLARE_API_TOKEN` | Cloudflare API Token（需具有 Workers 编辑权限） |
     | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID |
 
@@ -54,8 +54,8 @@ GET <WORKER_DOMAIN>/<SECRET>/sub?target=<TARGET>&url=<URLS>
 请求示例 
 
 假设：
-- Worker 域名: `example.workers.dev`
-- `SECRET`: `129438`
+- Worker 域名: `convert.example.com`
+- `SECRET`: `replace-with-a-long-random-secret`
 - 目标平台: `mihomo`
 - 原始订阅:
     1. `https://example.com/sub1`
@@ -68,7 +68,7 @@ GET <WORKER_DOMAIN>/<SECRET>/sub?target=<TARGET>&url=<URLS>
 3.  **最终 URL**:
 
 ```
-https://example.workers.dev/129438/sub?target=mihomo&url=https%3A%2F%2Fexample.com%2Fsub1%7Chttps%3A%2F%2Fexample.com%2Fsub2
+https://convert.example.com/replace-with-a-long-random-secret/sub?target=mihomo&url=https%3A%2F%2Fexample.com%2Fsub1%7Chttps%3A%2F%2Fexample.com%2Fsub2
 ```
 
 ### Docker
@@ -77,6 +77,6 @@ https://example.workers.dev/129438/sub?target=mihomo&url=https%3A%2F%2Fexample.c
 docker run -d \
     --name minisubconvert \
     -p 3000:3000 \
-    -e SECRET=minisubconvert \
+    -e SECRET=replace-with-a-long-random-secret \
     bestrui/minisubconvert
 ```

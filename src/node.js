@@ -1,65 +1,110 @@
 import { createServer } from "node:http";
 import { ProxyUtils } from "@/core/proxy-utils";
+import {
+    ClientError,
+    createRuntimeConfig,
+    fetchRemoteText,
+    fetchSubscriptionTexts,
+    getIgnoredCompatParams,
+    isAuthorizedPath,
+    logRequest,
+    normalizeTarget,
+    parseProxyParseRequest,
+    parseUpstreamUrls,
+    safeErrorCode,
+} from "@/server-utils";
+import { buildMihomoConfig, isMihomoTarget } from "@/subconfig";
+
+async function readNodeRequestTextWithLimit(req, byteLimit) {
+    let raw = "";
+    let size = 0;
+    for await (const chunk of req) {
+        size += Buffer.byteLength(chunk);
+        if (size > byteLimit) {
+            throw new ClientError(413, "body_too_large", "body too large");
+        }
+        raw += chunk;
+    }
+    return raw;
+}
 
 createServer(async (req, res) => {
     const method = (req.method || "").toUpperCase();
     const route = req.url || "";
     const url = new URL(route, "http://localhost");
     const pathname = url.pathname;
-    const ip = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim() || req.socket.remoteAddress || "-";
-    const secret = process.env.SECRET || "secret";
-    const log = (response, extra = "") => console.log(`[${new Date().toISOString()}] ${method} ${ip} ${response} ${route} ${extra ? ` ${extra}` : ""}`);
-    if (
-        !(method === "POST" && pathname === `/${secret}/api/proxy/parse`) &&
-        !(method === "GET" && pathname === `/${secret}/sub`)
-    ) {
+    const config = createRuntimeConfig(process.env);
+    const userAgent = req.headers["user-agent"] || "";
+
+    if (!isAuthorizedPath(method, pathname, config.secret)) {
         res.writeHead(403);
         res.end();
-        log("403");
+        logRequest("node_request_rejected", { status: 403 });
         return;
     }
 
     try {
         if (method === "POST") {
-            let raw = "";
-            for await (const chunk of req) raw += chunk;
-            const { data, client } = JSON.parse(raw || "{}");
+            const raw = await readNodeRequestTextWithLimit(req, config.maxPostBytes);
+            const { data, client } = parseProxyParseRequest(raw);
+            const target = normalizeTarget(client, userAgent);
             const proxies = ProxyUtils.parse(data);
-            const par_res = ProxyUtils.produce(proxies, client);
+            const par_res = ProxyUtils.produce(proxies, target);
             res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
             res.end(JSON.stringify({ status: "success", data: { par_res } }));
-            log("200", `parsed ${proxies.length} nodes, target client: ${client || "-"}`);
+            logRequest("node_proxy_parse_ok", { target, proxyCount: proxies.length });
             return;
         }
 
         const target = url.searchParams.get("target");
         const rawUrls = url.searchParams.get("url");
+        const rawConfigUrl = url.searchParams.get("config");
+        const ignoredParams = getIgnoredCompatParams(url.searchParams);
 
         if (!target || !rawUrls) {
-            res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
-            res.end("missing target or url");
-            log("400");
-            return;
+            throw new ClientError(400, "missing_target_or_url", "missing target or url");
         }
 
-        const proxies = (
-            await Promise.all(
-                rawUrls
-                    .split("|")
-                    .map((item) => item.trim())
-                    .filter(Boolean)
-                    .map((subscribeUrl) => fetch(subscribeUrl).then((response) => response.text())),
+        const client = normalizeTarget(target, userAgent);
+        const urls = parseUpstreamUrls(rawUrls, config);
+        const { texts, failureCount } = await fetchSubscriptionTexts(
+            urls,
+            config,
+            `${userAgent}`,
+        );
+        const proxies = texts.flatMap((subContent) => ProxyUtils.parse(subContent));
+        const shouldUseSubconfig = Boolean(rawConfigUrl && isMihomoTarget(client));
+        const resultProxies = shouldUseSubconfig
+            ? ProxyUtils.produce(proxies, client, "internal")
+            : proxies;
+        const result = shouldUseSubconfig
+            ? buildMihomoConfig(
+                resultProxies,
+                await fetchRemoteText(
+                    rawConfigUrl,
+                    config,
+                    `${userAgent}`,
+                    config.maxConfigBytes,
+                ),
             )
-        ).flatMap((subContent) => ProxyUtils.parse(subContent));
-        const result = ProxyUtils.produce(proxies, target);
+            : ProxyUtils.produce(resultProxies, client);
 
         res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
         res.end(result);
-        log("200", `parsed ${proxies.length} nodes, target client: ${target || "-"}`);
-    } catch {
-        res.writeHead(500);
-        res.end();
-        log("500");
+        logRequest("node_subscription_convert_ok", {
+            target: client,
+            upstreamCount: urls.length,
+            failedUpstreams: failureCount,
+            ignoredParams: ignoredParams.join(","),
+            proxyCount: resultProxies.length,
+            configuredOutput: shouldUseSubconfig,
+        });
+    } catch (error) {
+        const status = error instanceof ClientError ? error.status : 500;
+        const code = safeErrorCode(error);
+        res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(status >= 500 ? "internal error" : code);
+        logRequest("node_request_failed", { status, code });
     }
 }).listen(Number(process.env.PORT) || 3000, process.env.HOST || "0.0.0.0", () => {
     console.log(`Server is running at http://${process.env.HOST || "0.0.0.0"}:${Number(process.env.PORT) || 3000}`);

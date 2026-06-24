@@ -6,8 +6,7 @@ LABEL org.opencontainers.image.title="MiniSubConvert"
 LABEL org.opencontainers.image.description="A lightweight subscription converter"
 
 ENV HOST=0.0.0.0 \
-    PORT=3000 \
-    SECRET="minisubconvert"
+    PORT=3000
 
 EXPOSE $PORT
 

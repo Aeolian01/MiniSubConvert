@@ -13,6 +13,9 @@ jobs:
       SECRET: ${{ secrets.SECRET }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ${{ secrets.WORKER_NAME }}
+      WORKER_CUSTOM_DOMAIN: ${{ secrets.WORKER_CUSTOM_DOMAIN }}
+      WORKER_ZONE_NAME: ${{ secrets.WORKER_ZONE_NAME }}
 
     steps:
       - name: Checkout
@@ -26,9 +29,45 @@ jobs:
         with:
           version: 10
           cache: true
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Quality Gate
+        run: pnpm run quality
+      - name: Validate SECRET
+        run: |
+          node - <<'NODE'
+          const secret = process.env.SECRET || "";
+          const weak = new Set(["123456", "admin", "changeme", "default", "minisubconvert", "password", "secret", "test"]);
+          if (secret.length < 16 || /[\s/?#]/.test(secret) || weak.has(secret.toLowerCase())) {
+            throw new Error("SECRET must be at least 16 chars and not a common weak value");
+          }
+          NODE
+      - name: Build deployment config
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const required = ["WORKER_NAME", "WORKER_CUSTOM_DOMAIN", "WORKER_ZONE_NAME"];
+          const missing = required.filter((key) => !process.env[key]);
+          if (missing.length > 0) {
+            throw new Error(`Missing required deployment secrets: ${missing.join(", ")}`);
+          }
+
+          const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
+          config.name = process.env.WORKER_NAME;
+          config.workers_dev = false;
+          config.routes = [
+            {
+              pattern: process.env.WORKER_CUSTOM_DOMAIN,
+              zone_name: process.env.WORKER_ZONE_NAME,
+              custom_domain: true,
+            },
+          ];
+          fs.mkdirSync(".build", { recursive: true });
+          fs.writeFileSync(".build/wrangler.deploy.jsonc", `${JSON.stringify(config, null, "\t")}\n`);
+          NODE
       - name: Build And Deploy Worker
         run: |
-          echo "SECRET=$SECRET" > .env.local
-          pnpm install
-          pnpm run worker:deploy
-          pnpm run worker:secret
+          printf 'SECRET=%s\n' "$SECRET" > .env.local
+          pnpm run build:parsers
+          pnpm exec wrangler deploy .build/src/worker.js --config .build/wrangler.deploy.jsonc --tsconfig .build/jsconfig.json
+          pnpm exec wrangler secret bulk .env.local --config .build/wrangler.deploy.jsonc

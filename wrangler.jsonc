@@ -3,26 +3,29 @@
 	"name": "minisubconvert",
 	"main": "src/worker.js",
 	"compatibility_date": "2025-09-27",
+	"workers_dev": true,
 	"observability": {
 		"enabled": true
 	},
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"vars": {
+		"MAX_UPSTREAM_URLS": "8",
+		"MAX_UPSTREAM_CONCURRENCY": "3",
+		"MAX_UPSTREAM_BYTES": "5242880",
+		"MAX_CONFIG_BYTES": "262144",
+		"MAX_POST_BYTES": "1048576",
+		"UPSTREAM_TIMEOUT_MS": "10000",
+		"DNS_TIMEOUT_MS": "3000",
+		"MAX_UPSTREAM_REDIRECTS": "5"
+	},
 	"migrations": [
 		{
-			"new_sqlite_classes": [
+			"deleted_classes": [
 				"MiniSubConvert"
 			],
-			"tag": "v1"
+			"tag": "v2"
 		}
-	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"class_name": "MiniSubConvert",
-				"name": "MiniSubConvert"
-			}
-		]
-	}
+	]
 }
